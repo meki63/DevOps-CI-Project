@@ -1,71 +1,87 @@
 pipeline {
     agent any
-    
-    tools{
-        jdk 'jdk17'
-        nodejs 'node16'
-        
+    tools {
+        nodejs 'node' // 'nodejs' should match the name you configured in Global Tool Configuration
     }
-    
-    environment{
-        SCANNER_HOME= tool 'sonar-scanner'
+    parameters {
+        string(name: 'AppPort', defaultValue: '3000', description: 'Port to run the application')
+        string(name: 'RepositoryName', defaultValue: 'bank', description: 'Repository name for Docker image') // Parameterize repository name
+        string(name: 'ImageName', defaultValue: 'bank', description: 'Docker image name') // Parameterize image name
     }
-    
+    environment {
+        DOCKER_IMAGE_NAME = "${params.JFrogURL}/${params.RepositoryName}/${params.ImageName}:${env.BUILD_NUMBER}" // Parameterized repository and image names
+    }
     stages {
-        stage('Git Checkout') {
+        stage('Clone') {
             steps {
-                git branch: 'main', url: 'https://github.com/jaiswaladi246/fullstack-bank.git'
+                git branch: 'test', url: "https://github.com/meki63/DevOps-CI-Project.git"
             }
         }
-        
-        stage('OWASP FS SCAN') {
-            steps {
-                dependencyCheck additionalArguments: '--scan ./app/backend --disableYarnAudit --disableNodeAudit', odcInstallation: 'DC'
-                    dependencyCheckPublisher pattern: '**/dependency-check-report.xml'
-            }
-        }
-        
         stage('TRIVY FS SCAN') {
             steps {
                 sh "trivy fs ."
             }
         }
-        
-        stage('SONARQUBE ANALYSIS') {
-            steps {
-                withSonarQubeEnv('sonar') {
-                    sh " $SCANNER_HOME/bin/sonar-scanner -Dsonar.projectName=Bank -Dsonar.projectKey=Bank "
-                }
-            }
-        }
-        
-        
-         stage('Install Dependencies') {
-            steps {
-                sh "npm install"
-            }
-        }
-        
         stage('Backend') {
             steps {
-                dir('/root/.jenkins/workspace/Bank/app/backend') {
-                    sh "npm install"
-                }
+                sh '''
+                    mkdir -p $WORKSPACE/app/backend
+                    cd $WORKSPACE/app/backend
+                    npm install
+                '''
             }
         }
-        
-        stage('frontend') {
+        stage('Frontend') {
             steps {
-                dir('/root/.jenkins/workspace/Bank/app/frontend') {
-                    sh "npm install"
-                }
+                sh '''
+                    mkdir -p $WORKSPACE/app/frontend
+                    cd $WORKSPACE/app/frontend
+                    npm install
+                '''
             }
         }
-        
-        stage('Deploy to Conatiner') {
-            steps {
-                sh "npm run compose:up -d"
+        stage('Unit Tests - Backend') {
+    steps {
+        script {
+            dir("$WORKSPACE/app/backend") { // Adjust this path if necessary
+                sh 'npm install' // Install dependencies
+                sh 'npm test' // Run Mocha tests
             }
         }
     }
+}
+        stage('Build Docker Image') {
+            steps {
+                script {
+                    // Build the Docker image
+                    sh '''
+                        cd $WORKSPACE/app
+                        docker compose build
+                    '''
+                }
+            }
+        }
+        stage('Deploy to Container') {
+            steps {
+                script {
+                    // Deploy the application using docker-compose
+                    sh '''
+                        cd $WORKSPACE/app
+                        docker compose up -d
+                    '''
+                }
+            }
+        }
+   post {
+        always {
+             //Clean up Docker containers after the pipeline finishes
+          script {
+               sh '''
+                    cd $WORKSPACE/app
+                    docker compose down
+              '''
+           }
+        }
+    }
+}
 }
