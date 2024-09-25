@@ -1,87 +1,73 @@
 pipeline {
     agent any
-    tools {
-        nodejs 'node' // 'nodejs' should match the name you configured in Global Tool Configuration
-    }
     parameters {
-        string(name: 'AppPort', defaultValue: '3000', description: 'Port to run the application')
-        string(name: 'RepositoryName', defaultValue: 'bank', description: 'Repository name for Docker image') // Parameterize repository name
-        string(name: 'ImageName', defaultValue: 'bank', description: 'Docker image name') // Parameterize image name
+        string(name: 'SONAR_HOST_URL', defaultValue: 'http://192.168.201.13:9000', description: 'SonarQube host URL')
+        string(name: 'SONAR_API_KEY_ID', defaultValue: 'sonar_api_key', description: 'SonarQube API key credentials ID')
+    }
+    tools {
+        nodejs 'node16' // Ensure Node.js 16 is installed on Jenkins
     }
     environment {
-        DOCKER_IMAGE_NAME = "${params.JFrogURL}/${params.RepositoryName}/${params.ImageName}:${env.BUILD_NUMBER}" // Parameterized repository and image names
+        SCANNER_HOME = tool 'sonar-scanner' // Assuming SonarQube scanner is configured
     }
     stages {
-        stage('Clone') {
+        stage('Install Dependencies') {
             steps {
-                git branch: 'test', url: "https://github.com/meki63/DevOps-CI-Project.git"
+                sh 'npm install'
             }
         }
-        stage('TRIVY FS SCAN') {
+        stage('SonarQube Analysis') {
             steps {
-                sh "trivy fs ."
+                withCredentials([string(credentialsId: params.SONAR_API_KEY_ID, variable: 'SONAR_API_KEY')]) {
+                    withSonarQubeEnv('sonar') { // 'sonar' should match your SonarQube server configuration name in Jenkins
+                        sh """
+                        $SCANNER_HOME/bin/sonar-scanner \
+                        -Dsonar.projectKey=Bank \
+                        -Dsonar.sources=. \
+                        -Dsonar.host.url=${SONAR_HOST_URL} \
+                        -Dsonar.login=$SONAR_API_KEY
+                        """
+                    }
+                }
             }
         }
-        stage('Backend') {
+        stage('OWASP Dependency Check') {
             steps {
-                sh '''
-                    mkdir -p $WORKSPACE/app/backend
-                    cd $WORKSPACE/app/backend
-                    npm install
-                '''
+                dependencyCheck additionalArguments: '--scan ./app/backend --disableYarnAudit --disableNodeAudit', odcInstallation: 'DC'
+                dependencyCheckPublisher pattern: '**/dependency-check-report.xml'
             }
         }
-        stage('Frontend') {
+        stage('Start Containers') {
             steps {
-                sh '''
-                    mkdir -p $WORKSPACE/app/frontend
-                    cd $WORKSPACE/app/frontend
-                    npm install
-                '''
+                sh 'npm run compose:up'
             }
         }
-        stage('Unit Tests - Backend') {
-    steps {
-        script {
-            dir("$WORKSPACE/app/backend") { // Adjust this path if necessary
-                sh 'npm install' // Install dependencies
-                sh 'npm test' // Run Mocha tests
+        stage('Run Integration Tests') {
+            steps {
+                sh 'npm run test:integration'
             }
         }
+        stage('Run E2E Tests') {
+            steps {
+                sh 'npm run test:e2e'
+            }
+        }
+        // Uncomment if you want to bring the containers down after tests
+        /*
+        stage('Stop Containers') {
+            steps {
+                sh 'npm run compose:down'
+            }
+        }
+        */
     }
-}
-        stage('Build Docker Image') {
-            steps {
-                script {
-                    // Build the Docker image
-                    sh '''
-                        cd $WORKSPACE/app
-                        docker compose build
-                    '''
-                }
-            }
-        }
-        stage('Deploy to Container') {
-            steps {
-                script {
-                    // Deploy the application using docker-compose
-                    sh '''
-                        cd $WORKSPACE/app
-                        docker compose up -d
-                    '''
-                }
-            }
-        }
-   post {
+    post {
         always {
-             //Clean up Docker containers after the pipeline finishes
-          script {
-               sh '''
-                    cd $WORKSPACE/app
-                    docker compose down
-              '''
-           }
+            echo 'Cleaning up resources...'
+            // Ensure containers are stopped regardless of build status
+            sh 'npm run compose:down || true'
+            // Clean up the workspace
+            deleteDir() // Deletes the workspace directory
         }
     }
-}
 }
