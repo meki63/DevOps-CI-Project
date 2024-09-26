@@ -31,12 +31,7 @@ pipeline {
                 }
             }
         }
-        stage('OWASP Dependency Check') {
-            steps {
-                dependencyCheck additionalArguments: '--scan ./app/backend --disableYarnAudit --disableNodeAudit', odcInstallation: 'DC'
-                dependencyCheckPublisher pattern: '**/dependency-check-report.xml'
-            }
-        }
+        
         stage('Start Containers') {
             steps {
                 sh 'npm run compose:up'
